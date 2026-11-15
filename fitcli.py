@@ -129,6 +129,8 @@ def build_record(ex: dict) -> Optional[dict]:
     }
 
 
+teste = 23
+
 def imprimir_json(dados):
     # ensure_ascii=False mantem acentos e letras normais
     print(json.dumps(dados, indent=2, ensure_ascii=False))
