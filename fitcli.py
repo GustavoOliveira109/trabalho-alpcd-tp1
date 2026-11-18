@@ -180,6 +180,88 @@ def search_exercises(termo: str, n: Optional[int] = None) -> list:
     registos = [r for r in (build_record(e) for e in encontrados.values()) if r]
     return registos if n is None else registos[:n]
 
+# ---------------------------------------------------------------------------
+# Alinea c) - tipo de esforco (regex)
+# ---------------------------------------------------------------------------
+
+def strip_html(texto: str) -> str:
+    """Remove as tags HTML (<p>, <li>...) e espacos a mais."""
+    texto = re.sub(r"<[^>]+>", " ", texto or "")      # tags -> espaco
+    texto = re.sub(r"&nbsp;|&amp;", " ", texto)        # entidades comuns
+    return re.sub(r"\s+", " ", texto).strip()          # espacos repetidos
+
+
+# Palavras no NOME que indicam exercicio isolado (um so musculo/articulacao)
+ISOLATED_NAME = re.compile(
+    r"\b(curls?|extensions?|raises?|flyes?|flys?|kickbacks?|crunch(es)?|"
+    r"shrugs?|pushdowns?|pull-?overs?|skullcrushers?|skull crushers?|"
+    r"calf|concentration|preacher|sit-?ups?)\b",
+    re.IGNORECASE,
+)
+# Palavras no NOME que indicam exercicio composto (varias articulacoes)
+COMPOUND_NAME = re.compile(
+    r"\b(squats?|deadlifts?|press(es)?|rows?|pull-?ups?|chin-?ups?|dips?|"
+    r"lunges?|cleans?|snatch(es)?|thrusts?|push-?ups?|burpees?|"
+    r"step-?ups?|good ?mornings?)\b",
+    re.IGNORECASE,
+)
+# Palavras no NOME que indicam cardio
+CARDIO_NAME = re.compile(
+    r"\b(running|run|jogging|cycling|treadmill|elliptical|jump(ing)? rope|"
+    r"skipping|swimming|stair ?(climber|master)|rowing machine|jumping jacks?)\b",
+    re.IGNORECASE,
+)
+# Frases explicitas na DESCRICAO
+COMPOUND_DESC = re.compile(r"\b(compound|multi-?joint|multiple muscle)", re.IGNORECASE)
+ISOLATED_DESC = re.compile(r"\b(isolat(e|es|ed|ion)|single[- ]joint)", re.IGNORECASE)
+
+
+def classify_effort(ex: dict) -> str:
+    """
+    Devolve 'cardio', 'compound', 'isolated' ou 'other'.
+    Regras, da mais forte para a mais fraca:
+      1. categoria Cardio (ou nome tipico de cardio)      -> cardio
+      2. palavras no nome (isolado primeiro, depois composto)
+      3. frases explicitas na descricao
+      4. numero de musculos envolvidos
+    """
+    cat = (ex.get("category") or {}).get("name", "")
+    tr = english_translation(ex)
+    nome = tr["name"] if tr else ""
+    desc = strip_html(tr.get("description", "")) if tr else ""
+
+    # 1. cardio
+    if cat.lower() == "cardio" or CARDIO_NAME.search(nome):
+        return "cardio"
+
+    # 2. nome ("Triceps Pushdown" tem 'press' mas e isolado, por isso
+    #    testamos o isolado primeiro)
+    if ISOLATED_NAME.search(nome):
+        return "isolated"
+    if COMPOUND_NAME.search(nome):
+        return "compound"
+
+    # 3. descricao
+    if COMPOUND_DESC.search(desc):
+        return "compound"
+    if ISOLATED_DESC.search(desc):
+        return "isolated"
+
+    # 4. numero de musculos
+    principais = len(ex.get("muscles", []))
+    total = principais + len(ex.get("muscles_secondary", []))
+    if total == 0:
+        return "other"
+    if principais >= 2 or total >= 3:
+        return "compound"
+    return "isolated"
+
+
+def exercise_type_by_id(exercise_id: int) -> str:
+    """Vai buscar um exercicio pelo id e classifica-o."""
+    ex = get_json(f"exerciseinfo/{exercise_id}/")
+    return classify_effort(ex)
+
 @app.command()
 def top(n: int = typer.Argument(..., min=1, help="Quantos exercicios mostrar")):
     """a) Lista os N exercicios mais recentes (JSON)."""
@@ -198,6 +280,11 @@ def search(
 ):
     """b) Pesquisa exercicios por musculo e/ou categoria (JSON)."""
     imprimir_json(search_exercises(termo, n))
+
+@app.command("type")
+def type_cmd(exercise_id: int = typer.Argument(..., help="ID do exercicio")):
+    """c) Diz se o exercicio e compound, isolated, cardio ou other."""
+    print(exercise_type_by_id(exercise_id))
 
 if __name__ == "__main__":
     app()
