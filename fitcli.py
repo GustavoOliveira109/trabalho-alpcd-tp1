@@ -1,5 +1,6 @@
 """fitcli.py - CLI para consultar a API wger (exercicios fisicos)."""
 
+import csv
 import json
 import re
 import time
@@ -127,6 +128,7 @@ def build_record(ex: dict) -> Optional[dict]:
         "category": (ex.get("category") or {}).get("name"),
         "equipment": [e["name"] for e in ex.get("equipment", [])],
         "muscles": [m.get("name_en") or m["name"] for m in ex.get("muscles", [])],
+         "type": classify_effort(ex),
     }
 
 
@@ -314,6 +316,47 @@ def equipment_for_category(categoria: str) -> list:
                 descricoes.append(strip_html(tr.get("description", "")))
     return count_equipment_in_texts(descricoes)
 
+# ---------------------------------------------------------------------------
+# Alinea e) - plano de treino (composicao das alineas anteriores)
+# ---------------------------------------------------------------------------
+
+def build_workout(termos: list, tipo: str, n: int) -> dict:
+    """
+    Para cada musculo/categoria:
+      1. procura os exercicios                (alinea b)
+      2. filtra pelo tipo de esforco          (alinea c)
+      3. corta em N
+    """
+    plano = {}
+    for termo in termos:
+        exercicios = search_exercises(termo)
+        if tipo != "any":
+            exercicios = [e for e in exercicios if e["type"] == tipo]
+        plano[termo] = exercicios[:n]
+    return plano
+
+
+def export_csv(plano: dict, caminho: str) -> int:
+    """Escreve o plano num CSV (1 linha por exercicio) e devolve o numero de registos."""
+    campos = ["group", "id", "name", "type", "category", "equipment", "muscles"]
+    total = 0
+    with open(caminho, "w", newline="", encoding="utf-8") as f:
+        escritor = csv.DictWriter(f, fieldnames=campos)
+        escritor.writeheader()
+        for grupo, exercicios in plano.items():
+            for e in exercicios:
+                escritor.writerow({
+                    "group": grupo,
+                    "id": e["id"],
+                    "name": e["name"],
+                    "type": e["type"],
+                    "category": e["category"],
+                    "equipment": "; ".join(e["equipment"]),
+                    "muscles": "; ".join(e["muscles"]),
+                })
+                total += 1
+    return total
+
 @app.command()
 def top(n: int = typer.Argument(..., min=1, help="Quantos exercicios mostrar")):
     """a) Lista os N exercicios mais recentes (JSON)."""
@@ -342,6 +385,30 @@ def type_cmd(exercise_id: int = typer.Argument(..., help="ID do exercicio")):
 def equipment(categoria: str = typer.Argument(..., help="Categoria (ex.: chest)")):
     """d) Conta o equipamento mencionado nas descricoes de uma categoria (JSON)."""
     imprimir_json(equipment_for_category(categoria))
+
+@app.command()
+def workout(
+    grupos: str = typer.Argument(..., help="Lista separada por virgulas: biceps,back"),
+    tipo: str = typer.Argument(..., help="compound, isolated ou any"),
+    n: int = typer.Argument(..., min=1, help="Max. de exercicios por grupo"),
+    csv_path: Optional[str] = typer.Option(None, "--csv", help="Exportar para CSV"),
+):
+    """e) Gera um plano de treino (JSON) e opcionalmente exporta para CSV."""
+    tipo = tipo.lower()
+    if tipo not in ("compound", "isolated", "any"):
+        raise typer.BadParameter("tipo tem de ser compound, isolated ou any")
+
+    termos = [g.strip() for g in grupos.split(",") if g.strip()]
+    if not termos:
+        raise typer.BadParameter("indique pelo menos um musculo/categoria")
+
+    plano = build_workout(termos, tipo, n)
+
+    if csv_path:
+        total = export_csv(plano, csv_path)
+        print(f"Ficheiro exportado: {csv_path} ({total} registos)")
+    else:
+        imprimir_json(plano)
 
 if __name__ == "__main__":
     app()
