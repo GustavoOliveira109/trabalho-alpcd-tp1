@@ -5,6 +5,7 @@ import re
 import time
 from functools import lru_cache
 from typing import Optional
+from collections import Counter
 
 import requests
 import typer
@@ -262,6 +263,57 @@ def exercise_type_by_id(exercise_id: int) -> str:
     ex = get_json(f"exerciseinfo/{exercise_id}/")
     return classify_effort(ex)
 
+# ---------------------------------------------------------------------------
+# Alinea d) - equipamento mencionado nas descricoes (regex)
+# ---------------------------------------------------------------------------
+
+# (padrao regex, nome normalizado)
+EQUIPMENT_PATTERNS = [
+    (r"barbells?", "barbell"),
+    (r"dumb-?bells?", "dumbbell"),
+    (r"cables?", "cable"),
+    (r"machines?", "machine"),
+    (r"kettle-?bells?", "kettlebell"),
+    (r"body-?weight|body weight", "bodyweight"),
+    (r"(?:resistance |exercise )?bands?", "band"),
+    (r"benche?s?", "bench"),
+    (r"ez[- ]?bars?|curl bars?", "ez bar"),
+    (r"medicine balls?", "medicine ball"),
+    (r"(?:swiss|stability|exercise) balls?", "swiss ball"),
+    (r"pull-?up bars?", "pull-up bar"),
+]
+# \b = fronteira de palavra; IGNORECASE = ignora maiusculas
+EQUIPMENT_REGEX = [
+    (re.compile(rf"\b(?:{padrao})\b", re.IGNORECASE), nome)
+    for padrao, nome in EQUIPMENT_PATTERNS
+]
+
+
+def count_equipment_in_texts(textos: list) -> list:
+    """Conta mencoes de equipamento num conjunto de textos, por ordem decrescente."""
+    contagem = Counter()
+    for texto in textos:
+        for regex, nome in EQUIPMENT_REGEX:
+            contagem[nome] += len(regex.findall(texto))
+    ordenado = sorted(contagem.items(), key=lambda par: par[1], reverse=True)
+    return [{nome: n} for nome, n in ordenado if n > 0]
+
+
+def equipment_for_category(categoria: str) -> list:
+    """Le as descricoes dos exercicios de uma categoria e conta o equipamento."""
+    ids = resolve_term(categoria)
+    if not ids["categories"]:
+        nomes = ", ".join(c["name"] for c in get_categories())
+        erro(f"Categoria '{categoria}' nao existe. Categorias validas: {nomes}")
+
+    descricoes = []
+    for cid in ids["categories"]:
+        for ex in get_all("exerciseinfo/", {"language": LANG_EN, "category": cid}):
+            tr = english_translation(ex)
+            if tr:
+                descricoes.append(strip_html(tr.get("description", "")))
+    return count_equipment_in_texts(descricoes)
+
 @app.command()
 def top(n: int = typer.Argument(..., min=1, help="Quantos exercicios mostrar")):
     """a) Lista os N exercicios mais recentes (JSON)."""
@@ -285,6 +337,11 @@ def search(
 def type_cmd(exercise_id: int = typer.Argument(..., help="ID do exercicio")):
     """c) Diz se o exercicio e compound, isolated, cardio ou other."""
     print(exercise_type_by_id(exercise_id))
+
+@app.command()
+def equipment(categoria: str = typer.Argument(..., help="Categoria (ex.: chest)")):
+    """d) Conta o equipamento mencionado nas descricoes de uma categoria (JSON)."""
+    imprimir_json(equipment_for_category(categoria))
 
 if __name__ == "__main__":
     app()
